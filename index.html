@@ -100,6 +100,52 @@
         padding: 5px;
       }
 
+      .location-input-container {
+        margin: 15px 0;
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+      }
+
+      .location-input-container input {
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 20px;
+        font-size: 0.9em;
+        outline: none;
+        width: 180px;
+      }
+
+      .location-input-container button {
+        padding: 8px 15px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 0.9em;
+      }
+
+      .location-input-container button:hover {
+        background-color: #0056b3;
+      }
+
+      .use-my-location-button {
+        margin: 10px auto;
+        padding: 8px 15px;
+        background-color: #6c757d;
+        color: white;
+        border: none;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 0.9em;
+        display: block;
+      }
+
+      .use-my-location-button:hover {
+        background-color: #5a6268;
+      }
+
       .messaging-button {
         position: fixed;
         bottom: 20px;
@@ -298,6 +344,9 @@
         .details-column {
           align-items: center;
         }
+        .location-input-container input {
+          width: 150px;
+        }
         .messaging-button {
           width: 50px;
           height: 50px;
@@ -376,10 +425,10 @@
       <source src="snownight.mp4" type="video/mp4" />
     </video>
     <video class="background-video" id="thunderstormVideoMorning" loop muted>
-      <source src="thanderday.mp4" type="video/mp4" />
+      <source src="thunderday.mp4" type="video/mp4" />
     </video>
     <video class="background-video" id="thunderstormVideo" loop muted>
-      <source src="thandernig.mp4" type="video/mp4" />
+      <source src="thundernight.mp4" type="video/mp4" />
     </video>
     <video class="background-video" id="mistVideoMorning" loop muted>
       <source src="mist.mp4" type="video/mp4" />
@@ -410,6 +459,17 @@
       <div class="location" id="location">Loading...</div>
       <div class="temperature" id="temperature">--°C</div>
       <div class="description" id="description">Getting weather...</div>
+      <div class="location-input-container" id="locationInputContainer">
+        <input type="text" id="cityInput" placeholder="Enter city name" />
+        <button id="fetchCityWeather">Get Weather</button>
+      </div>
+      <button
+        class="use-my-location-button"
+        id="useMyLocationButton"
+        style="display: none"
+      >
+        Use My Location
+      </button>
       <div class="details">
         <div class="details-column">
           <div>Humidity: <span id="humidity">--%</span></div>
@@ -440,7 +500,20 @@
       const WEATHER_API_KEY = "75f7134fa1e7c2b00f1b937c28fa0736";
       const GEMINI_API_KEY = "AIzaSyAAGHSiWbVv_YMyvDspSrd7CT9y2HKpsGw";
       const weatherCard = document.getElementById("weatherCard");
-      let currentTemperature = "--°C"; // Store current temperature
+      const locationInputContainer = document.getElementById(
+        "locationInputContainer"
+      );
+      const cityInput = document.getElementById("cityInput");
+      const fetchCityWeather = document.getElementById("fetchCityWeather");
+      const useMyLocationButton = document.getElementById(
+        "useMyLocationButton"
+      );
+      let currentTemperature = "--°C";
+      let isUsingGeolocation = true;
+      let refreshInterval = null;
+      let lastLat = null;
+      let lastLon = null;
+      let lastCity = null;
 
       const weatherVideos = {
         clearMorning: document.getElementById("clearVideoMorning"),
@@ -525,65 +598,208 @@
         }
       }
 
-      function getWeather() {
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(showWeather, showError);
-        } else {
-          alert("Geolocation is not supported by this browser.");
+      function showLoading() {
+        document.getElementById("location").textContent = "Loading...";
+        document.getElementById("temperature").textContent = "--°C";
+        document.getElementById("description").textContent =
+          "Getting weather...";
+        document.getElementById("humidity").textContent = "--%";
+        document.getElementById("wind").textContent = "-- km/h";
+        document.getElementById("feelsLike").textContent = "--°C";
+        document.getElementById("pressure").textContent = "-- hPa";
+        document.getElementById("weatherEmoji").textContent = "⛅";
+        locationInputContainer.style.display = "none";
+        useMyLocationButton.style.display = "none";
+      }
+
+      function updateWeatherUI(data) {
+        document.getElementById(
+          "location"
+        ).textContent = `${data.name}, ${data.sys.country}`;
+        currentTemperature = `${Math.round(data.main.temp)}°C`;
+        document.getElementById("temperature").textContent = currentTemperature;
+        document.getElementById("description").textContent =
+          data.weather[0].description;
+        document.getElementById(
+          "humidity"
+        ).textContent = `${data.main.humidity}%`;
+        document.getElementById("wind").textContent = `${Math.round(
+          data.wind.speed * 3.6
+        )} km/h`;
+        document.getElementById("feelsLike").textContent = `${Math.round(
+          data.main.feels_like
+        )}°C`;
+        document.getElementById(
+          "pressure"
+        ).textContent = `${data.main.pressure} hPa`;
+
+        const weatherMain = data.weather[0].main.toLowerCase();
+        const emoji = weatherEmojis[weatherMain] || "⛅";
+        document.getElementById("weatherEmoji").textContent = emoji;
+
+        const videoType =
+          weatherMain in weatherEmojis ? weatherMain : "default";
+        setWeatherVideo(videoType);
+        locationInputContainer.style.display = "block";
+        useMyLocationButton.style.display = isUsingGeolocation
+          ? "none"
+          : "block";
+      }
+
+      async function fetchWeatherByCity(city) {
+        showLoading();
+        try {
+          const response = await fetch(
+            `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
+              city
+            )}&units=metric&appid=${WEATHER_API_KEY}`
+          );
+          if (!response.ok) {
+            throw new Error("City not found");
+          }
+          const data = await response.json();
+          isUsingGeolocation = false;
+          lastCity = city;
+          lastLat = null;
+          lastLon = null;
+          clearInterval(refreshInterval);
+          updateWeatherUI(data);
+        } catch (error) {
+          console.error("Error fetching weather by city:", error);
+          document.getElementById("description").textContent =
+            "City not found. Try another.";
+          document.getElementById("location").textContent = "Enter a city";
           setWeatherVideo("default");
+          locationInputContainer.style.display = "block";
+          useMyLocationButton.style.display = "block";
         }
       }
 
-      function showWeather(position) {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-
-        fetch(
-          `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${WEATHER_API_KEY}`
-        )
-          .then((response) => response.json())
-          .then((data) => {
-            document.getElementById("location").textContent = data.name;
-            currentTemperature = `${Math.round(data.main.temp)}°C`; // Store temperature
-            document.getElementById("temperature").textContent =
-              currentTemperature;
-            document.getElementById("description").textContent =
-              data.weather[0].description;
-            document.getElementById(
-              "humidity"
-            ).textContent = `${data.main.humidity}%`;
-            document.getElementById("wind").textContent = `${Math.round(
-              data.wind.speed * 3.6
-            )} km/h`;
-            document.getElementById("feelsLike").textContent = `${Math.round(
-              data.main.feels_like
-            )}°C`;
-            document.getElementById(
-              "pressure"
-            ).textContent = `${data.main.pressure} hPa`;
-
-            const weatherMain = data.weather[0].main.toLowerCase();
-            const emoji = weatherEmojis[weatherMain] || "⛅";
-            document.getElementById("weatherEmoji").textContent = emoji;
-
-            const videoType =
-              weatherMain in weatherEmojis ? weatherMain : "default";
-            setWeatherVideo(videoType);
-          })
-          .catch((error) => {
-            console.error("Error fetching weather:", error);
-            document.getElementById("description").textContent =
-              "Failed to load weather";
-            setWeatherVideo("default");
-          });
+      async function fetchWeatherByCoords(lat, lon) {
+        showLoading();
+        try {
+          const response = await fetch(
+            `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${WEATHER_API_KEY}`
+          );
+          if (!response.ok) {
+            throw new Error("Failed to fetch weather");
+          }
+          const data = await response.json();
+          lastLat = lat;
+          lastLon = lon;
+          lastCity = null;
+          updateWeatherUI(data);
+          // Start auto-refresh if not already running
+          if (!refreshInterval && isUsingGeolocation) {
+            refreshInterval = setInterval(() => {
+              if (isUsingGeolocation && lastLat && lastLon) {
+                fetchWeatherByCoords(lastLat, lastLon);
+              }
+            }, 300000); // 5 minutes
+          }
+        } catch (error) {
+          console.error("Error fetching weather:", error);
+          document.getElementById("description").textContent =
+            "Failed to load weather. Enter a city below.";
+          document.getElementById("location").textContent = "No location";
+          setWeatherVideo("default");
+          locationInputContainer.style.display = "block";
+          useMyLocationButton.style.display = "block";
+        }
       }
 
       function showError(error) {
-        document.getElementById("description").textContent =
-          "Location access denied";
         console.error("Geolocation error:", error);
+        let message = "Unable to access location.";
+        if (error.code === error.PERMISSION_DENIED) {
+          message =
+            "Location access denied. Please enter a city or allow location access.";
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          message = "Location unavailable. Please enter a city.";
+        } else if (error.code === error.TIMEOUT) {
+          message =
+            "Location request timed out. Please try again or enter a city.";
+        }
+        document.getElementById("description").textContent = message;
+        document.getElementById("location").textContent = "No location";
         setWeatherVideo("default");
+        locationInputContainer.style.display = "block";
+        useMyLocationButton.style.display = "block";
       }
+
+      async function checkLocationPermission() {
+        if ("permissions" in navigator) {
+          try {
+            const permission = await navigator.permissions.query({
+              name: "geolocation",
+            });
+            return permission.state; // "granted", "prompt", "denied"
+          } catch (error) {
+            console.warn("Permission API not supported or error:", error);
+            return "unknown";
+          }
+        }
+        return "unknown";
+      }
+
+      async function getWeather() {
+        showLoading();
+        if (!navigator.geolocation) {
+          document.getElementById("description").textContent =
+            "Geolocation not supported. Please enter a city.";
+          document.getElementById("location").textContent = "No location";
+          setWeatherVideo("default");
+          locationInputContainer.style.display = "block";
+          useMyLocationButton.style.display = "block";
+          return;
+        }
+
+        const permission = await checkLocationPermission();
+        if (permission === "denied") {
+          document.getElementById("description").textContent =
+            "Location access denied. Please enter a city.";
+          document.getElementById("location").textContent = "No location";
+          setWeatherVideo("default");
+          locationInputContainer.style.display = "block";
+          useMyLocationButton.style.display = "block";
+          return;
+        }
+
+        isUsingGeolocation = true;
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            fetchWeatherByCoords(
+              position.coords.latitude,
+              position.coords.longitude
+            );
+          },
+          showError,
+          { timeout: 10000, maximumAge: 60000, enableHighAccuracy: true }
+        );
+      }
+
+      fetchCityWeather.addEventListener("click", () => {
+        const city = cityInput.value.trim();
+        if (city) {
+          fetchWeatherByCity(city);
+          cityInput.value = "";
+        }
+      });
+
+      cityInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          const city = cityInput.value.trim();
+          if (city) {
+            fetchWeatherByCity(city);
+            cityInput.value = "";
+          }
+        }
+      });
+
+      useMyLocationButton.addEventListener("click", () => {
+        isUsingGeolocation = true;
+        getWeather();
+      });
 
       // Chatbot Functionality
       const messagingButton = document.getElementById("messagingButton");
@@ -601,16 +817,11 @@
       closeChatbot.addEventListener("click", toggleChatbot);
 
       function addMessage(content, isUser) {
-        console.log(`Adding ${isUser ? "user" : "AI"} message: ${content}`);
         const messageDiv = document.createElement("div");
         messageDiv.className = `message ${
           isUser ? "user-message" : "ai-message"
         }`;
-        if (isUser) {
-          messageDiv.textContent = content;
-        } else {
-          messageDiv.innerHTML = content; // Use innerHTML for AI messages to render <strong> tags
-        }
+        messageDiv.innerHTML = isUser ? content : formatAIResponse(content);
         chatMessages.appendChild(messageDiv);
         chatMessages.scrollTop = chatMessages.scrollHeight;
       }
@@ -633,7 +844,6 @@
       }
 
       function formatAIResponse(text) {
-        // Replace **text** with <strong>text</strong>
         return text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
       }
 
@@ -675,7 +885,7 @@
             data.candidates?.[0]?.content?.parts?.[0]?.text ||
             "No response from AI.";
           removeTypingIndicator();
-          addMessage(formatAIResponse(aiResponse), false); // Format the response before adding
+          addMessage(aiResponse, false);
         } catch (error) {
           console.error("Error calling Gemini API:", error);
           removeTypingIndicator();
@@ -708,7 +918,13 @@
 
       // Initial setup
       setWeatherVideo("default");
+      locationInputContainer.style.display = "none";
       getWeather();
+
+      // Cleanup interval on page unload
+      window.addEventListener("unload", () => {
+        clearInterval(refreshInterval);
+      });
     </script>
   </body>
 </html>
